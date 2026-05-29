@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>我的 JSON Canvas 首页 - IndexYK</title>
+  <meta name="description" content="基于标准 JSON Canvas 格式的极客卡片导航白板首页程序。">
+  <link rel="stylesheet" href="style.css">
+  <!-- 引入 FontAwesome 图标库 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+  <!-- 无限画布视口 -->
+  <div id="canvas-viewport" tabindex="0">
+    <div id="canvas-container">
+      <!-- 边缘线条连接层 -->
+      <svg id="edges-svg">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 2 L 8 5 L 0 8 z" fill="var(--text-muted)"/>
+          </marker>
+          <marker id="arrow-active" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 2 L 8 5 L 0 8 z" fill="var(--accent)"/>
+          </marker>
+        </defs>
+      </svg>
+      <!-- 动态加载节点容器 -->
+      <div id="nodes-container"></div>
+    </div>
+  </div>
+
+  <!-- 左上角 Logo 栏 -->
+  <div class="ui-panel brand-panel">
+    <div class="brand-logo">
+      <i class="fa-solid fa-square-nodes"></i>
+    </div>
+    <div>
+      <span class="brand-text">IndexYK Canvas</span>
+      <span class="edit-badge" id="edit-badge">编辑模式</span>
+    </div>
+  </div>
+
+  <!-- 右上角工具栏 -->
+  <div class="ui-panel control-panel">
+    <button class="ui-btn" id="btn-edit-mode" title="切换编辑模式 (Tab)">
+      <i class="fa-solid fa-pen-to-square"></i>
+    </button>
+    <button class="ui-btn" id="btn-add-node" title="添加新链接卡片" style="display: none;">
+      <i class="fa-solid fa-plus"></i>
+    </button>
+    <div class="ui-divider" id="toolbar-divider" style="display: none;"></div>
+    
+    <button class="ui-btn" id="btn-zoom-in" title="放大">
+      <i class="fa-solid fa-magnifying-glass-plus"></i>
+    </button>
+    <button class="ui-btn" id="btn-zoom-out" title="缩小">
+      <i class="fa-solid fa-magnifying-glass-minus"></i>
+    </button>
+    <button class="ui-btn" id="btn-zoom-fit" title="适应屏幕">
+      <i class="fa-solid fa-compress"></i>
+    </button>
+    <div class="ui-divider"></div>
+    
+    <button class="ui-btn" id="btn-import" title="导入 JSON Canvas">
+      <i class="fa-solid fa-file-import"></i>
+    </button>
+    <button class="ui-btn" id="btn-export" title="导出 JSON Canvas">
+      <i class="fa-solid fa-file-export"></i>
+    </button>
+    <button class="ui-btn" id="btn-theme" title="切换主题">
+      <i class="fa-solid fa-moon"></i>
+    </button>
+  </div>
+
+  <!-- 左下角信息栏 -->
+  <div class="ui-panel info-panel">
+    <div class="info-item">
+      <i class="fa-solid fa-network-wired"></i>
+      <span id="stat-nodes">0 个节点</span>
+    </div>
+    <div class="info-item">
+      <i class="fa-solid fa-share-nodes"></i>
+      <span id="stat-edges">0 条连线</span>
+    </div>
+    <div class="info-item">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <span id="stat-zoom">100%</span>
+    </div>
+  </div>
+
+  <!-- 隐藏的文件导入框 -->
+  <input type="file" id="file-input" accept=".canvas,.json" style="display: none;">
+
+  <!-- 右下角编辑模式帮助浮层 -->
+  <div class="help-overlay">
+    <span>💡 <b>操作指南:</b> [空格 + 拖拽] 平移画布 | [滚轮] 缩放 | 编辑模式下拖拽边缘小圆点可以建立连线</span>
+  </div>
+
+  <!-- 卡片编辑模态框 -->
+  <div class="modal-overlay" id="card-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modal-title">添加新链接块</h3>
+        <button class="modal-close" id="btn-modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="field-node-id">
+        <div class="form-group">
+          <label class="form-label" for="field-title">网站标题</label>
+          <input type="text" class="form-input" id="field-title" placeholder="例如：GitHub" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="field-url">网站链接</label>
+          <input type="url" class="form-input" id="field-url" placeholder="https://github.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="field-description">网站描述</label>
+          <input type="text" class="form-input" id="field-description" placeholder="一句话简单介绍这个网站">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="field-image">封面图片</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" class="form-input" id="field-image" placeholder="输入外部图片 URL，或点击右侧上传本地图片" style="flex: 1;">
+            <button class="btn btn-secondary" id="btn-upload-image" style="padding: 0 16px; border-radius: 12px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;" type="button">
+              <i class="fa-solid fa-cloud-arrow-up"></i> 上传图片
+            </button>
+            <input type="file" id="image-file-input" accept="image/*" style="display: none;">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">卡片主题色 / 边框色</label>
+          <div class="color-presets" id="color-presets">
+            <!-- 颜色预设点将由JS生成 -->
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-modal-cancel">取消</button>
+        <button class="btn btn-primary" id="btn-modal-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 关系连接线标签模态框 -->
+  <div class="modal-overlay" id="edge-modal">
+    <div class="modal-card" style="width: 380px;">
+      <div class="modal-header">
+        <h3 class="modal-title">编辑连接线</h3>
+        <button class="modal-close" id="btn-edge-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="field-edge-id">
+        <div class="form-group">
+          <label class="form-label" for="field-edge-label">关系说明 (可选)</label>
+          <input type="text" class="form-input" id="field-edge-label" placeholder="例如：参考链接、灵感来源">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-edge-delete" style="background: var(--danger); border-color: var(--danger); color: white; margin-right: auto;">删除连线</button>
+        <button class="btn btn-secondary" id="btn-edge-cancel">取消</button>
+        <button class="btn btn-primary" id="btn-edge-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 引入默认数据和主逻辑脚本 -->
+  <script src="defaultData.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
