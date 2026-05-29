@@ -1,3 +1,6 @@
+Don't trust AI code.
+
+----
 # 🚀 IndexYK JSON Canvas Homepage / 导航白板首页
 
 [中文](#-中文介绍) | [English](#-english-introduction)
