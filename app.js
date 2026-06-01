@@ -661,8 +661,8 @@ class CanvasApp {
 
   // --- Draw Relations (Edges) ---
   drawEdges() {
-    // Clear old edges
-    const paths = this.edgesSvg.querySelectorAll(".edge-path, .edge-text-group");
+    // Clear old edges including helpers
+    const paths = this.edgesSvg.querySelectorAll(".edge-path, .edge-helper-path, .edge-text-group");
     paths.forEach(p => p.remove());
 
     this.edges.forEach(edge => {
@@ -686,31 +686,46 @@ class CanvasApp {
         // Draw bezier path
         const pathData = this.calculateBezierPath(startPt, endPt, fromSide, toSide);
         
+        // 1. Visible path (thin line)
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("d", pathData);
         path.setAttribute("class", "edge-path");
         path.setAttribute("marker-end", "url(#arrow)");
+        this.edgesSvg.appendChild(path);
+
+        // 2. Invisible thicker helper path for extremely easy clicking and hovering
+        const helperPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        helperPath.setAttribute("d", pathData);
+        helperPath.setAttribute("class", "edge-helper-path");
+        helperPath.setAttribute("fill", "none");
+        helperPath.setAttribute("stroke", "transparent");
+        helperPath.setAttribute("stroke-width", "12");
+        helperPath.style.pointerEvents = "stroke";
         
-        // Add double click or click event to edit connection label / delete it
-        path.style.pointerEvents = "stroke";
-        path.style.cursor = "pointer";
+        // Only set pointer cursor when editing is allowed
+        if (this.editMode) {
+          helperPath.style.cursor = "pointer";
+        } else {
+          helperPath.style.cursor = "default";
+        }
         
-        path.addEventListener("mouseover", () => {
+        // Hover effects coordination
+        helperPath.addEventListener("mouseover", () => {
           path.classList.add("active");
           path.setAttribute("marker-end", "url(#arrow-active)");
         });
         
-        path.addEventListener("mouseout", () => {
+        helperPath.addEventListener("mouseout", () => {
           path.classList.remove("active");
           path.setAttribute("marker-end", "url(#arrow)");
         });
 
-        path.addEventListener("click", (e) => {
+        helperPath.addEventListener("click", (e) => {
           e.stopPropagation();
           this.showEdgeModal(edge);
         });
 
-        this.edgesSvg.appendChild(path);
+        this.edgesSvg.appendChild(helperPath);
 
         // Draw Label if exists
         if (edge.label) {
@@ -843,6 +858,7 @@ class CanvasApp {
       this.viewport.style.cursor = "grab";
       document.querySelectorAll(".canvas-node").forEach(n => n.classList.remove("selected"));
     }
+    this.drawEdges();
   }
 
   showAddModal() {
