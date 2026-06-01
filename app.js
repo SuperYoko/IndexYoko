@@ -41,6 +41,14 @@ class CanvasApp {
     this.nodeStartH = 0;
     this.spacePressed = false;
 
+    // Multiple Selection & Group Drag States
+    this.selectedNodeIds = [];
+    this.isSelecting = false;
+    this.selectCanvasStartX = 0;
+    this.selectCanvasStartY = 0;
+    this.selectionBoxEl = null;
+    this.draggedNodesStartPositions = [];
+
     // DOM Elements
     this.viewport = document.getElementById("canvas-viewport");
     this.container = document.getElementById("canvas-container");
@@ -58,6 +66,7 @@ class CanvasApp {
     this.loadData();
     this.renderPresets();
     this.setupEventListeners();
+    this.setupGroupButton();
     this.setupUploadHandlers();
     this.updateStats();
   }
@@ -233,7 +242,7 @@ class CanvasApp {
       }
     });
 
-    // Panning & dragging mouse handlers
+    // Panning, dragging & selecting mouse handlers
     this.viewport.addEventListener("mousedown", (e) => {
       const isMiddleClick = e.button === 1;
       const isLeftClick = e.button === 0;
@@ -247,6 +256,39 @@ class CanvasApp {
         e.preventDefault();
         return;
       }
+
+      // Marquee selection start
+      if (isLeftClick && this.editMode && !this.spacePressed) {
+        const clickedNode = e.target.closest(".canvas-node");
+        const clickedUI = e.target.closest(".ui-panel, .modal-overlay, .help-overlay");
+
+        if (!clickedNode && !clickedUI) {
+          // Clear current selection unless we hold shift/ctrl
+          if (!e.shiftKey && !e.ctrlKey) {
+            this.clearSelection();
+          }
+
+          this.isSelecting = true;
+          this.startX = e.clientX;
+          this.startY = e.clientY;
+
+          const rect = this.container.getBoundingClientRect();
+          this.selectCanvasStartX = (e.clientX - rect.left) / this.scale;
+          this.selectCanvasStartY = (e.clientY - rect.top) / this.scale;
+
+          // Create selection box element
+          this.selectionBoxEl = document.createElement("div");
+          this.selectionBoxEl.className = "selection-box";
+          this.selectionBoxEl.style.left = `${this.selectCanvasStartX}px`;
+          this.selectionBoxEl.style.top = `${this.selectCanvasStartY}px`;
+          this.selectionBoxEl.style.width = "0px";
+          this.selectionBoxEl.style.height = "0px";
+          this.container.appendChild(this.selectionBoxEl);
+
+          e.preventDefault();
+          return;
+        }
+      }
     });
 
     window.addEventListener("mousemove", (e) => {
@@ -257,26 +299,67 @@ class CanvasApp {
         return;
       }
 
-      if (this.isDraggingNode && this.draggedNodeId) {
+      // Marquee selection moving
+      if (this.isSelecting && this.selectionBoxEl) {
+        const rect = this.container.getBoundingClientRect();
+        const curX = (e.clientX - rect.left) / this.scale;
+        const curY = (e.clientY - rect.top) / this.scale;
+
+        const x = Math.min(this.selectCanvasStartX, curX);
+        const y = Math.min(this.selectCanvasStartY, curY);
+        const w = Math.abs(this.selectCanvasStartX - curX);
+        const h = Math.abs(this.selectCanvasStartY - curY);
+
+        this.selectionBoxEl.style.left = `${x}px`;
+        this.selectionBoxEl.style.top = `${y}px`;
+        this.selectionBoxEl.style.width = `${w}px`;
+        this.selectionBoxEl.style.height = `${h}px`;
+
+        // Find overlapping nodes
+        this.selectedNodeIds = [];
+        this.nodes.forEach(node => {
+          const overlap = (
+            x < node.x + node.width &&
+            x + w > node.x &&
+            y < node.y + node.height &&
+            y + h > node.y
+          );
+
+          const el = document.getElementById(`node-${node.id}`);
+          if (el) {
+            if (overlap) {
+              el.classList.add("selected");
+              this.selectedNodeIds.push(node.id);
+            } else {
+              el.classList.remove("selected");
+            }
+          }
+        });
+
+        this.updateGroupButtonVisibility();
+        return;
+      }
+
+      // Drag selected node(s)
+      if (this.isDraggingNode && this.draggedNodesStartPositions.length > 0) {
         const deltaX = (e.clientX - this.startX) / this.scale;
         const deltaY = (e.clientY - this.startY) / this.scale;
-        
-        const node = this.nodes.find(n => n.id === this.draggedNodeId);
-        if (node) {
-          // Snap to 10px grid if shift is not pressed
-          let nextX = this.nodeStartX + deltaX;
-          let nextY = this.nodeStartY + deltaY;
-          if (!e.shiftKey) {
-            nextX = Math.round(nextX / 10) * 10;
-            nextY = Math.round(nextY / 10) * 10;
-          }
 
-          node.x = nextX;
-          node.y = nextY;
-          
-          this.updateNodeElement(node);
-          this.drawEdges();
-        }
+        this.draggedNodesStartPositions.forEach(startPos => {
+          const node = this.nodes.find(n => n.id === startPos.id);
+          if (node) {
+            let nextX = startPos.x + deltaX;
+            let nextY = startPos.y + deltaY;
+            if (!e.shiftKey) {
+              nextX = Math.round(nextX / 10) * 10;
+              nextY = Math.round(nextY / 10) * 10;
+            }
+            node.x = nextX;
+            node.y = nextY;
+            this.updateNodeElement(node);
+          }
+        });
+        this.drawEdges();
         return;
       }
 
@@ -290,8 +373,8 @@ class CanvasApp {
           let nextH = this.nodeStartH + deltaY;
           
           // Limits
-          nextW = Math.max(220, nextW);
-          nextH = Math.max(160, nextH);
+          nextW = Math.max(node.type === "group" ? 100 : 220, nextW);
+          nextH = Math.max(node.type === "group" ? 80 : 160, nextH);
 
           if (!e.shiftKey) {
             nextW = Math.round(nextW / 10) * 10;
@@ -322,9 +405,18 @@ class CanvasApp {
         this.viewport.style.cursor = this.editMode ? "default" : "grab";
       }
 
+      if (this.isSelecting) {
+        this.isSelecting = false;
+        if (this.selectionBoxEl) {
+          this.selectionBoxEl.remove();
+          this.selectionBoxEl = null;
+        }
+      }
+
       if (this.isDraggingNode) {
         this.isDraggingNode = false;
         this.draggedNodeId = null;
+        this.draggedNodesStartPositions = [];
         this.saveData();
       }
 
@@ -476,12 +568,38 @@ class CanvasApp {
 
   createNodeElement(node) {
     const card = document.createElement("div");
-    card.className = "canvas-node";
     card.id = `node-${node.id}`;
     card.style.left = `${node.x}px`;
     card.style.top = `${node.y}px`;
     card.style.width = `${node.width}px`;
     card.style.height = `${node.height}px`;
+
+    if (node.type === "group") {
+      card.className = "canvas-node group-node";
+      const customColor = node.color || "#6366f1";
+      card.style.borderColor = customColor;
+
+      card.innerHTML = `
+        <div class="group-header">
+          <span class="group-title" title="${node.label || ''}">${node.label || '未命名分组'}</span>
+          <div class="node-edit-controls">
+            <div class="node-edit-btn edit" title="编辑分组属性"><i class="fa-solid fa-pen"></i></div>
+            <div class="node-edit-btn delete" title="删除分组"><i class="fa-solid fa-trash"></i></div>
+          </div>
+        </div>
+        <div class="resize-handle"></div>
+      `;
+
+      this.attachNodeEvents(card, node);
+
+      if (this.selectedNodeIds.includes(node.id)) {
+        card.classList.add("selected");
+      }
+
+      return card;
+    }
+
+    card.className = "canvas-node";
 
     // Extract domain name
     let domain = "";
@@ -547,6 +665,10 @@ class CanvasApp {
     // Interactive event listeners
     this.attachNodeEvents(card, node);
 
+    if (this.selectedNodeIds.includes(node.id)) {
+      card.classList.add("selected");
+    }
+
     return card;
   }
 
@@ -558,11 +680,16 @@ class CanvasApp {
       el.style.width = `${node.width}px`;
       el.style.height = `${node.height}px`;
 
-      // Update inner texts in case of simple adjustments
-      const titleEl = el.querySelector(".card-title");
-      if (titleEl) titleEl.textContent = node.label || "未命名";
-      const descEl = el.querySelector(".card-description");
-      if (descEl) descEl.textContent = node.description || "暂无描述信息";
+      if (node.type === "group") {
+        const titleEl = el.querySelector(".group-title");
+        if (titleEl) titleEl.textContent = node.label || "未命名分组";
+      } else {
+        // Update inner texts in case of simple adjustments
+        const titleEl = el.querySelector(".card-title");
+        if (titleEl) titleEl.textContent = node.label || "未命名";
+        const descEl = el.querySelector(".card-description");
+        if (descEl) descEl.textContent = node.description || "暂无描述信息";
+      }
     }
   }
 
@@ -622,16 +749,49 @@ class CanvasApp {
       if (this.editMode) {
         // Drag node around
         e.stopPropagation();
+
+        // If not holding shift/ctrl and node is NOT already in selection, make it the only selection
+        if (!e.shiftKey && !e.ctrlKey && !this.selectedNodeIds.includes(node.id)) {
+          this.selectedNodeIds = [node.id];
+          document.querySelectorAll(".canvas-node").forEach(n => n.classList.remove("selected"));
+          element.classList.add("selected");
+        } else if (e.shiftKey || e.ctrlKey) {
+          // Toggle selection
+          if (this.selectedNodeIds.includes(node.id)) {
+            this.selectedNodeIds = this.selectedNodeIds.filter(id => id !== node.id);
+            element.classList.remove("selected");
+          } else {
+            this.selectedNodeIds.push(node.id);
+            element.classList.add("selected");
+          }
+        }
+
+        this.updateGroupButtonVisibility();
+
         this.isDraggingNode = true;
         this.draggedNodeId = node.id;
         this.startX = e.clientX;
         this.startY = e.clientY;
-        this.nodeStartX = node.x;
-        this.nodeStartY = node.y;
+        
+        // Find nodes inside any dragged group
+        let nodesToDrag = [...this.selectedNodeIds];
+        
+        nodesToDrag.forEach(id => {
+          const n = this.nodes.find(nodeObj => nodeObj.id === id);
+          if (n && n.type === "group") {
+            const insideNodes = this.getNodesInGroup(n);
+            insideNodes.forEach(inNode => {
+              if (!nodesToDrag.includes(inNode.id)) {
+                nodesToDrag.push(inNode.id);
+              }
+            });
+          }
+        });
 
-        // Visual selection border
-        document.querySelectorAll(".canvas-node").forEach(n => n.classList.remove("selected"));
-        element.classList.add("selected");
+        this.draggedNodesStartPositions = nodesToDrag.map(id => {
+          const n = this.nodes.find(nodeObj => nodeObj.id === id);
+          return { id, x: n.x, y: n.y };
+        });
       }
     });
 
@@ -856,7 +1016,7 @@ class CanvasApp {
       addBtn.style.display = "none";
       divider.style.display = "none";
       this.viewport.style.cursor = "grab";
-      document.querySelectorAll(".canvas-node").forEach(n => n.classList.remove("selected"));
+      this.clearSelection();
     }
     this.drawEdges();
   }
@@ -868,6 +1028,11 @@ class CanvasApp {
     document.getElementById("field-url").value = "";
     document.getElementById("field-description").value = "";
     document.getElementById("field-image").value = "";
+
+    // Show link-specific fields
+    document.getElementById("field-url").closest(".form-group").style.display = "flex";
+    document.getElementById("field-description").closest(".form-group").style.display = "flex";
+    document.getElementById("field-image").closest(".form-group").style.display = "flex";
     
     // Default select first preset color
     document.querySelectorAll(".color-dot").forEach(d => d.classList.remove("active"));
@@ -878,12 +1043,18 @@ class CanvasApp {
   }
 
   showEditModal(node) {
-    document.getElementById("modal-title").textContent = "编辑链接卡片";
+    const isGroup = node.type === "group";
+    document.getElementById("modal-title").textContent = isGroup ? "编辑分组" : "编辑链接卡片";
     document.getElementById("field-node-id").value = node.id;
     document.getElementById("field-title").value = node.label || "";
     document.getElementById("field-url").value = node.url || "";
     document.getElementById("field-description").value = node.description || "";
     document.getElementById("field-image").value = node.image || "";
+
+    // Toggle fields for group vs link node
+    document.getElementById("field-url").closest(".form-group").style.display = isGroup ? "none" : "flex";
+    document.getElementById("field-description").closest(".form-group").style.display = isGroup ? "none" : "flex";
+    document.getElementById("field-image").closest(".form-group").style.display = isGroup ? "none" : "flex";
 
     // Set correct active preset dot
     document.querySelectorAll(".color-dot").forEach(d => {
@@ -898,6 +1069,9 @@ class CanvasApp {
 
   handleNodeSave() {
     const id = document.getElementById("field-node-id").value;
+    const node = id ? this.nodes.find(n => n.id === id) : null;
+    const isGroup = node ? node.type === "group" : false;
+
     const title = document.getElementById("field-title").value.trim();
     const url = document.getElementById("field-url").value.trim();
     const description = document.getElementById("field-description").value.trim();
@@ -906,20 +1080,25 @@ class CanvasApp {
     const activeColorDot = document.querySelector(".color-dot.active");
     const color = activeColorDot ? activeColorDot.dataset.color : "#6366f1";
 
-    if (!title || !url) {
-      alert("标题和网站链接不能为空！");
+    if (!title) {
+      alert("标题不能为空！");
+      return;
+    }
+    if (!isGroup && !url) {
+      alert("网站链接不能为空！");
       return;
     }
 
     if (id) {
       // Edit existing
-      const node = this.nodes.find(n => n.id === id);
       if (node) {
         node.label = title;
-        node.url = url;
-        node.description = description;
-        node.image = image;
         node.color = color;
+        if (!isGroup) {
+          node.url = url;
+          node.description = description;
+          node.image = image;
+        }
       }
     } else {
       // Add new node in center of current viewport
@@ -1103,6 +1282,91 @@ class CanvasApp {
     reader.readAsText(file);
     // Reset file input value
     event.target.value = "";
+  }
+
+  // --- Multi-Selection & Grouping Helpers ---
+  clearSelection() {
+    this.selectedNodeIds = [];
+    document.querySelectorAll(".canvas-node").forEach(n => n.classList.remove("selected"));
+    this.updateGroupButtonVisibility();
+  }
+
+  updateGroupButtonVisibility() {
+    const btn = document.getElementById("btn-group-nodes");
+    if (!btn) return;
+    if (this.editMode && this.selectedNodeIds.length >= 2) {
+      btn.style.display = "inline-flex";
+    } else {
+      btn.style.display = "none";
+    }
+  }
+
+  getNodesInGroup(groupNode) {
+    return this.nodes.filter(n => {
+      if (n.id === groupNode.id || n.type === "group") return false;
+      return (
+        n.x >= groupNode.x &&
+        n.y >= groupNode.y &&
+        n.x + n.width <= groupNode.x + groupNode.width &&
+        n.y + n.height <= groupNode.y + groupNode.height
+      );
+    });
+  }
+
+  setupGroupButton() {
+    const btn = document.getElementById("btn-group-nodes");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        if (this.selectedNodeIds.length < 2) return;
+        
+        const groupLabel = prompt("请输入新建分组的名称：", "新建分组");
+        if (groupLabel === null) return; // cancelled
+        
+        // Find bounds of all selected nodes
+        let minX = Infinity, minY = Infinity;
+        let maxX = -Infinity, maxY = -Infinity;
+        
+        const selectedNodes = this.nodes.filter(n => this.selectedNodeIds.includes(n.id));
+        selectedNodes.forEach(n => {
+          minX = Math.min(minX, n.x);
+          minY = Math.min(minY, n.y);
+          maxX = Math.max(maxX, n.x + n.width);
+          maxY = Math.max(maxY, n.y + n.height);
+        });
+        
+        // Bounding Box padding
+        const paddingX = 30;
+        const paddingTop = 50; // more padding on top for group title
+        const paddingBottom = 30;
+        
+        const x = minX - paddingX;
+        const y = minY - paddingTop;
+        const width = (maxX - minX) + (paddingX * 2);
+        const height = (maxY - minY) + paddingTop + paddingBottom;
+        
+        // Preset color (first preset or default)
+        const activeColorDot = document.querySelector(".color-dot.active");
+        const color = activeColorDot ? activeColorDot.dataset.color : "#6366f1";
+        
+        const newGroup = {
+          id: `group-${Date.now()}`,
+          type: "group",
+          x: Math.round(x / 10) * 10,
+          y: Math.round(y / 10) * 10,
+          width: Math.round(width / 10) * 10,
+          height: Math.round(height / 10) * 10,
+          label: groupLabel.trim() || "新建分组",
+          color: color
+        };
+        
+        // Put the new group at the beginning of the nodes array so it renders behind cards
+        this.nodes.unshift(newGroup);
+        
+        this.clearSelection();
+        this.saveData();
+        this.renderCanvas();
+      });
+    }
   }
 }
 
