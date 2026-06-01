@@ -172,6 +172,46 @@ app.get('/api/data', (req, res) => {
   }
 });
 
+// Helper function to clean up uploaded images that are no longer referenced in any node
+function cleanupOrphanedImages(canvasData) {
+  if (!canvasData || !Array.isArray(canvasData.nodes)) return;
+
+  // Collect all active upload image filenames referenced by nodes
+  const activeImages = new Set();
+  canvasData.nodes.forEach(node => {
+    if (node.image && node.image.startsWith('/uploads/')) {
+      const filename = node.image.replace('/uploads/', '');
+      if (filename) {
+        activeImages.add(filename);
+      }
+    }
+  });
+
+  // Read uploads directory and delete orphaned files
+  fs.readdir(UPLOADS_DIR, (err, files) => {
+    if (err) {
+      console.error("Failed to read uploads directory for cleanup:", err);
+      return;
+    }
+
+    files.forEach(file => {
+      // Avoid deleting hidden files or system files
+      if (file.startsWith('.')) return;
+
+      if (!activeImages.has(file)) {
+        const filePath = path.join(UPLOADS_DIR, file);
+        fs.unlink(filePath, (unlinkErr) => {
+          if (unlinkErr) {
+            console.error(`Failed to delete orphaned image ${file}:`, unlinkErr);
+          } else {
+            console.log(`Successfully deleted orphaned image: ${file}`);
+          }
+        });
+      }
+    });
+  });
+}
+
 // POST endpoint to save canvas data
 app.post('/api/data', (req, res) => {
   const canvasData = req.body;
@@ -183,6 +223,14 @@ app.post('/api/data', (req, res) => {
     if (err) {
       return res.status(500).json({ error: "Failed to save canvas data." });
     }
+    
+    // Asynchronously trigger orphaned image cleanup to keep uploads directory pristine
+    try {
+      cleanupOrphanedImages(canvasData);
+    } catch (cleanupErr) {
+      console.error("Error during orphaned image cleanup:", cleanupErr);
+    }
+
     res.json({ success: true, message: "Canvas saved successfully on server." });
   });
 });

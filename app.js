@@ -48,6 +48,7 @@ class CanvasApp {
     this.selectCanvasStartY = 0;
     this.selectionBoxEl = null;
     this.draggedNodesStartPositions = [];
+    this.hoveredNodeId = null;
 
     // DOM Elements
     this.viewport = document.getElementById("canvas-viewport");
@@ -68,6 +69,7 @@ class CanvasApp {
     this.setupEventListeners();
     this.setupGroupButton();
     this.setupUploadHandlers();
+    this.setupPasteHandlers();
     this.updateStats();
   }
 
@@ -482,11 +484,21 @@ class CanvasApp {
   // --- Upload Handlers ---
   setupUploadHandlers() {
     const uploadBtn = document.getElementById("btn-upload-image");
+    const deleteImgBtn = document.getElementById("btn-delete-card-image");
     const imageFileInput = document.getElementById("image-file-input");
     const imageUrlField = document.getElementById("field-image");
 
     uploadBtn.addEventListener("click", () => {
       imageFileInput.click();
+    });
+
+    deleteImgBtn.addEventListener("click", () => {
+      imageUrlField.value = "";
+      this.updateModalImageDeleteBtn();
+    });
+
+    imageUrlField.addEventListener("input", () => {
+      this.updateModalImageDeleteBtn();
     });
 
     imageFileInput.addEventListener("change", async () => {
@@ -513,12 +525,144 @@ class CanvasApp {
 
         const data = await response.json();
         imageUrlField.value = data.url;
+        this.updateModalImageDeleteBtn();
       } catch (err) {
         alert("上传失败: " + err.message);
       } finally {
         uploadBtn.disabled = false;
         uploadBtn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i> 上传图片';
         imageFileInput.value = ""; // clear file field
+      }
+    });
+  }
+
+  updateModalImageDeleteBtn() {
+    const imageUrlField = document.getElementById("field-image");
+    const deleteImgBtn = document.getElementById("btn-delete-card-image");
+    if (imageUrlField && deleteImgBtn) {
+      if (imageUrlField.value.trim() === "") {
+        deleteImgBtn.style.display = "none";
+      } else {
+        deleteImgBtn.style.display = "inline-flex";
+      }
+    }
+  }
+
+  // --- Paste Handlers ---
+  setupPasteHandlers() {
+    window.addEventListener("paste", async (e) => {
+      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+      let imageFile = null;
+      for (const item of items) {
+        if (item.type.indexOf("image") === 0) {
+          imageFile = item.getAsFile();
+          break;
+        }
+      }
+
+      if (!imageFile) return;
+
+      // Rename the file using Date.now() + random suffix
+      const timestamp = Date.now();
+      const randomNum = Math.floor(Math.random() * 1000000);
+      let ext = "png";
+      if (imageFile.type) {
+        const parts = imageFile.type.split("/");
+        if (parts.length > 1) {
+          ext = parts[1];
+          if (ext === "jpeg") ext = "jpg";
+        }
+      }
+      const newFileName = `${timestamp}-${randomNum}.${ext}`;
+      const renamedFile = new File([imageFile], newFileName, { type: imageFile.type });
+
+      // Scenario A: Card modal is open and active
+      const cardModal = document.getElementById("card-modal");
+      if (cardModal && cardModal.classList.contains("active")) {
+        const nodeId = document.getElementById("field-node-id").value;
+        const node = nodeId ? this.nodes.find(n => n.id === nodeId) : null;
+        if (node && node.type === "group") {
+          return; // Ignore pasting onto group configuration
+        }
+
+        const uploadBtn = document.getElementById("btn-upload-image");
+        const originalHtml = uploadBtn.innerHTML;
+        uploadBtn.disabled = true;
+        uploadBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 粘贴上传中...';
+
+        try {
+          const formData = new FormData();
+          formData.append("image", renamedFile);
+
+          const response = await fetch("/api/upload", {
+            method: "POST",
+            body: formData
+          });
+
+          if (!response.ok) {
+            const errRes = await response.json();
+            throw new Error(errRes.error || "Upload failed.");
+          }
+
+          const data = await response.json();
+          document.getElementById("field-image").value = data.url;
+          this.updateModalImageDeleteBtn();
+        } catch (err) {
+          alert("粘贴图片失败: " + err.message);
+        } finally {
+          uploadBtn.disabled = false;
+          uploadBtn.innerHTML = originalHtml;
+        }
+        return;
+      }
+
+      // Scenario B: Clipboard paste on the canvas viewport
+      if (this.editMode) {
+        const targetNodeId = this.hoveredNodeId || (this.selectedNodeIds.length === 1 ? this.selectedNodeIds[0] : null);
+        if (targetNodeId) {
+          const node = this.nodes.find(n => n.id === targetNodeId);
+          if (node && node.type !== "group") {
+            const nodeEl = document.getElementById(`node-${node.id}`);
+            let spinner = null;
+            if (nodeEl) {
+              spinner = document.createElement("div");
+              spinner.className = "node-paste-loading";
+              spinner.innerHTML = `
+                <div>
+                  <i class="fa-solid fa-spinner fa-spin" style="font-size:24px;"></i>
+                  <span>正在粘贴图片...</span>
+                </div>
+              `;
+              nodeEl.appendChild(spinner);
+            }
+
+            try {
+              const formData = new FormData();
+              formData.append("image", renamedFile);
+
+              const response = await fetch("/api/upload", {
+                method: "POST",
+                body: formData
+              });
+
+              if (!response.ok) {
+                const errRes = await response.json();
+                throw new Error(errRes.error || "Upload failed.");
+              }
+
+              const data = await response.json();
+              node.image = data.url;
+              this.saveData();
+              this.renderCanvas();
+            } catch (err) {
+              alert("粘贴图片到卡片失败: " + err.message);
+            } finally {
+              if (spinner) {
+                spinner.remove();
+              }
+            }
+          }
+        }
       }
     });
   }
@@ -800,6 +944,16 @@ class CanvasApp {
         // Normal homepage click actions can be added here
       }
     });
+
+    element.addEventListener("mouseenter", () => {
+      this.hoveredNodeId = node.id;
+    });
+
+    element.addEventListener("mouseleave", () => {
+      if (this.hoveredNodeId === node.id) {
+        this.hoveredNodeId = null;
+      }
+    });
   }
 
   // --- Connection Coordinate Logic ---
@@ -1038,6 +1192,7 @@ class CanvasApp {
     const firstDot = document.querySelector(".color-dot");
     if (firstDot) firstDot.classList.add("active");
 
+    this.updateModalImageDeleteBtn();
     this.openModal("card-modal");
   }
 
@@ -1063,6 +1218,7 @@ class CanvasApp {
       }
     });
 
+    this.updateModalImageDeleteBtn();
     this.openModal("card-modal");
   }
 

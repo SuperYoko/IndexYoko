@@ -854,3 +854,40 @@ body {
   pointer-events: none;
   z-index: 5;
 }
+
+/* Paste Uploading State Overlay on Cards */
+.node-paste-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.node-paste-loading > div {
+  background: rgba(15, 17, 28, 0.85) !important;
+  border: 1.5px solid var(--accent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  border-radius: 16px;
+  animation: pasteFadeIn 0.2s ease-out;
+}
+
+@keyframes pasteFadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
