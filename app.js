@@ -727,6 +727,7 @@ class CanvasApp {
         this.isResizingNode = true;
         this.resizedNodeId = node.id;
         this.startX = e.clientX;
+        this.startY = e.clientY;
         this.nodeStartW = node.width;
         this.nodeStartH = node.height;
         return;
