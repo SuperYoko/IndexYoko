@@ -843,3 +843,14 @@ body {
     box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
   }
 }
+
+/* Real-time Alignment Snapping Guide Lines */
+.guide-line {
+  stroke: #c084fc; /* Vibrant purple alignment color */
+  stroke-width: 1px;
+  stroke-dasharray: 4 4;
+  opacity: 0.9;
+  filter: drop-shadow(0 0 1.5px rgba(192, 132, 252, 0.6));
+  pointer-events: none;
+  z-index: 5;
+}

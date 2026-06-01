@@ -342,20 +342,19 @@ class CanvasApp {
 
       // Drag selected node(s)
       if (this.isDraggingNode && this.draggedNodesStartPositions.length > 0) {
-        const deltaX = (e.clientX - this.startX) / this.scale;
-        const deltaY = (e.clientY - this.startY) / this.scale;
+        let deltaX = (e.clientX - this.startX) / this.scale;
+        let deltaY = (e.clientY - this.startY) / this.scale;
+
+        // Position Snapping!
+        const snapRes = this.checkPositionSnap(deltaX, deltaY);
+        deltaX = snapRes.finalDeltaX;
+        deltaY = snapRes.finalDeltaY;
 
         this.draggedNodesStartPositions.forEach(startPos => {
           const node = this.nodes.find(n => n.id === startPos.id);
           if (node) {
-            let nextX = startPos.x + deltaX;
-            let nextY = startPos.y + deltaY;
-            if (!e.shiftKey) {
-              nextX = Math.round(nextX / 10) * 10;
-              nextY = Math.round(nextY / 10) * 10;
-            }
-            node.x = nextX;
-            node.y = nextY;
+            node.x = startPos.x + deltaX;
+            node.y = startPos.y + deltaY;
             this.updateNodeElement(node);
           }
         });
@@ -376,13 +375,10 @@ class CanvasApp {
           nextW = Math.max(node.type === "group" ? 100 : 220, nextW);
           nextH = Math.max(node.type === "group" ? 80 : 160, nextH);
 
-          if (!e.shiftKey) {
-            nextW = Math.round(nextW / 10) * 10;
-            nextH = Math.round(nextH / 10) * 10;
-          }
-
-          node.width = nextW;
-          node.height = nextH;
+          // Apply Size Snapping with Visual Guides!
+          const snapRes = this.checkResizeSnap(node, nextW, nextH);
+          node.width = snapRes.nextW;
+          node.height = snapRes.nextH;
 
           this.updateNodeElement(node);
           this.drawEdges();
@@ -417,12 +413,14 @@ class CanvasApp {
         this.isDraggingNode = false;
         this.draggedNodeId = null;
         this.draggedNodesStartPositions = [];
+        this.clearGuideLines();
         this.saveData();
       }
 
       if (this.isResizingNode) {
         this.isResizingNode = false;
         this.resizedNodeId = null;
+        this.clearGuideLines();
         this.saveData();
       }
 
@@ -1368,6 +1366,212 @@ class CanvasApp {
         this.renderCanvas();
       });
     }
+  }
+
+  // --- Real-time Snapping & Alignment Guide Lines ---
+  clearGuideLines() {
+    const lines = this.edgesSvg.querySelectorAll(".guide-line");
+    lines.forEach(l => l.remove());
+  }
+
+  renderGuideLines(draggedNode, x, y, activeGuides) {
+    activeGuides.forEach(g => {
+      const other = g.otherNode;
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("class", "guide-line");
+
+      if (g.axis === 'x') {
+        // Vertical guide line
+        const minY = Math.min(y, other.y) - 50;
+        const maxY = Math.max(y + draggedNode.height, other.y + other.height) + 50;
+        line.setAttribute("x1", g.targetVal.toString());
+        line.setAttribute("y1", minY.toString());
+        line.setAttribute("x2", g.targetVal.toString());
+        line.setAttribute("y2", maxY.toString());
+      } else {
+        // Horizontal guide line
+        const minX = Math.min(x, other.x) - 50;
+        const maxX = Math.max(x + draggedNode.width, other.x + other.width) + 50;
+        line.setAttribute("x1", minX.toString());
+        line.setAttribute("y1", g.targetVal.toString());
+        line.setAttribute("x2", maxX.toString());
+        line.setAttribute("y2", g.targetVal.toString());
+      }
+
+      this.edgesSvg.appendChild(line);
+    });
+  }
+
+  checkPositionSnap(deltaX, deltaY) {
+    // Clear old guides
+    this.clearGuideLines();
+
+    if (this.draggedNodesStartPositions.length === 0) return { finalDeltaX: deltaX, finalDeltaY: deltaY };
+
+    // We use the primary dragged node (first node in selection) as snap anchor
+    const primary = this.draggedNodesStartPositions[0];
+    const primaryNode = this.nodes.find(n => n.id === primary.id);
+    if (!primaryNode) return { finalDeltaX: deltaX, finalDeltaY: deltaY };
+
+    // Current un-snapped coordinates in canvas space
+    let nextX = primary.x + deltaX;
+    let nextY = primary.y + deltaY;
+
+    if (!window.event?.shiftKey) {
+      nextX = Math.round(nextX / 10) * 10;
+      nextY = Math.round(nextY / 10) * 10;
+    }
+
+    const snapThreshold = 8;
+    let bestDiffX = snapThreshold;
+    let bestDiffY = snapThreshold;
+    let snapX = nextX;
+    let snapY = nextY;
+
+    let guides = [];
+
+    const draggedIds = this.draggedNodesStartPositions.map(p => p.id);
+    const targetNodes = this.nodes.filter(n => !draggedIds.includes(n.id));
+
+    const w = primaryNode.width;
+    const h = primaryNode.height;
+
+    // Check X alignments
+    for (let other of targetNodes) {
+      const oX = other.x;
+      const oW = other.width;
+      const oMidX = oX + oW / 2;
+      const oRight = oX + oW;
+
+      const checkSnapX = (val, targetVal, guideType) => {
+        const diff = val - targetVal;
+        if (Math.abs(diff) < Math.abs(bestDiffX)) {
+          bestDiffX = diff;
+          snapX = nextX - diff;
+          guides.push({ axis: 'x', targetVal, guideType, otherNode: other });
+        }
+      };
+
+      checkSnapX(nextX, oX, 'left-left');
+      checkSnapX(nextX, oRight, 'left-right');
+      checkSnapX(nextX + w, oX, 'right-left');
+      checkSnapX(nextX + w, oRight, 'right-right');
+      checkSnapX(nextX + w / 2, oMidX, 'center-center');
+    }
+
+    // Check Y alignments
+    for (let other of targetNodes) {
+      const oY = other.y;
+      const oH = other.height;
+      const oMidY = oY + oH / 2;
+      const oBottom = oY + oH;
+
+      const checkSnapY = (val, targetVal, guideType) => {
+        const diff = val - targetVal;
+        if (Math.abs(diff) < Math.abs(bestDiffY)) {
+          bestDiffY = diff;
+          snapY = nextY - diff;
+          guides.push({ axis: 'y', targetVal, guideType, otherNode: other });
+        }
+      };
+
+      checkSnapY(nextY, oY, 'top-top');
+      checkSnapY(nextY, oBottom, 'top-bottom');
+      checkSnapY(nextY + h, oY, 'bottom-top');
+      checkSnapY(nextY + h, oBottom, 'bottom-bottom');
+      checkSnapY(nextY + h / 2, oMidY, 'center-center');
+    }
+
+    let finalDeltaX = deltaX;
+    let finalDeltaY = deltaY;
+
+    if (Math.abs(bestDiffX) < snapThreshold) {
+      finalDeltaX = snapX - primary.x;
+    }
+    if (Math.abs(bestDiffY) < snapThreshold) {
+      finalDeltaY = snapY - primary.y;
+    }
+
+    // Filter active guides
+    const activeGuides = [];
+    if (Math.abs(bestDiffX) < snapThreshold) {
+      const finalXTarget = snapX;
+      const matchedX = guides.find(g => g.axis === 'x' && Math.abs((g.guideType.startsWith('left') ? finalXTarget : g.guideType.startsWith('right') ? finalXTarget + w : finalXTarget + w/2) - g.targetVal) < 0.01);
+      if (matchedX) activeGuides.push(matchedX);
+    }
+    if (Math.abs(bestDiffY) < snapThreshold) {
+      const finalYTarget = snapY;
+      const matchedY = guides.find(g => g.axis === 'y' && Math.abs((g.guideType.startsWith('top') ? finalYTarget : g.guideType.startsWith('bottom') ? finalYTarget + h : finalYTarget + h/2) - g.targetVal) < 0.01);
+      if (matchedY) activeGuides.push(matchedY);
+    }
+
+    this.renderGuideLines(primaryNode, snapX, snapY, activeGuides);
+
+    return { finalDeltaX, finalDeltaY };
+  }
+
+  checkResizeSnap(node, nextW, nextH) {
+    this.clearGuideLines();
+    const snapThreshold = 8;
+    let snappedW = null;
+    let snappedH = null;
+    let bestOtherW = null;
+    let bestOtherH = null;
+
+    for (let other of this.nodes) {
+      if (other.id === node.id) continue;
+      if (Math.abs(nextW - other.width) < snapThreshold) {
+        snappedW = other.width;
+        bestOtherW = other;
+      }
+      if (Math.abs(nextH - other.height) < snapThreshold) {
+        snappedH = other.height;
+        bestOtherH = other;
+      }
+    }
+
+    const activeGuides = [];
+    if (snappedW !== null) {
+      nextW = snappedW;
+      activeGuides.push({ axis: 'x', targetVal: node.x + nextW, otherNode: bestOtherW, type: 'size-w' });
+    } else if (!window.event?.shiftKey) {
+      nextW = Math.round(nextW / 10) * 10;
+    }
+
+    if (snappedH !== null) {
+      nextH = snappedH;
+      activeGuides.push({ axis: 'y', targetVal: node.y + nextH, otherNode: bestOtherH, type: 'size-h' });
+    } else if (!window.event?.shiftKey) {
+      nextH = Math.round(nextH / 10) * 10;
+    }
+
+    // Render guide lines for size matching!
+    activeGuides.forEach(g => {
+      const other = g.otherNode;
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("class", "guide-line");
+
+      if (g.type === 'size-w') {
+        // Vertical dashed line showing matching width boundary
+        const minY = Math.min(node.y, other.y) - 20;
+        const maxY = Math.max(node.y + nextH, other.y + other.height) + 20;
+        line.setAttribute("x1", g.targetVal.toString());
+        line.setAttribute("y1", minY.toString());
+        line.setAttribute("x2", g.targetVal.toString());
+        line.setAttribute("y2", maxY.toString());
+      } else {
+        // Horizontal dashed line showing matching height boundary
+        const minX = Math.min(node.x, other.x) - 20;
+        const maxX = Math.max(node.x + nextW, other.x + other.width) + 20;
+        line.setAttribute("x1", minX.toString());
+        line.setAttribute("y1", g.targetVal.toString());
+        line.setAttribute("x2", maxX.toString());
+        line.setAttribute("y2", g.targetVal.toString());
+      }
+      this.edgesSvg.appendChild(line);
+    });
+
+    return { nextW, nextH };
   }
 }
 
