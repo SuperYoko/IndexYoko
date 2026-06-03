@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE_PATH = path.join(DATA_DIR, 'data.canvas');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const TODOS_DIR = path.join(DATA_DIR, 'todos');
 
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) {
@@ -17,6 +18,9 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(TODOS_DIR)) {
+  fs.mkdirSync(TODOS_DIR, { recursive: true });
 }
 
 // Default layout data if data.canvas does not exist yet
@@ -247,6 +251,93 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
 }, (error, req, res, next) => {
   // Handle multer errors gracefully
   res.status(400).json({ error: error.message });
+});
+
+// GET endpoint to retrieve all todos
+app.get('/api/todos', (req, res) => {
+  fs.readdir(TODOS_DIR, (err, files) => {
+    if (err) {
+      return res.status(500).json({ error: "Failed to read todos directory." });
+    }
+    const jsonFiles = files.filter(file => file.endsWith('.json'));
+    const todos = [];
+    let readCount = 0;
+
+    if (jsonFiles.length === 0) {
+      return res.json([]);
+    }
+
+    jsonFiles.forEach(file => {
+      const filePath = path.join(TODOS_DIR, file);
+      fs.readFile(filePath, 'utf8', (err, data) => {
+        readCount++;
+        if (!err) {
+          try {
+            todos.push(JSON.parse(data));
+          } catch (e) {
+            console.error(`Error parsing todo file ${file}:`, e);
+          }
+        }
+        if (readCount === jsonFiles.length) {
+          res.json(todos);
+        }
+      });
+    });
+  });
+});
+
+// POST endpoint to create a new todo
+app.post('/api/todos', (req, res) => {
+  const todo = req.body;
+  if (!todo || !todo.id) {
+    return res.status(400).json({ error: "Invalid todo format. Must include an id." });
+  }
+
+  const filePath = path.join(TODOS_DIR, `todo-${todo.id}.json`);
+  fs.writeFile(filePath, JSON.stringify(todo, null, 2), 'utf8', (err) => {
+    if (err) {
+      return res.status(500).json({ error: "Failed to save todo." });
+    }
+    res.json({ success: true, todo });
+  });
+});
+
+// PUT endpoint to update a todo
+app.put('/api/todos/:id', (req, res) => {
+  const id = req.params.id;
+  const todo = req.body;
+  if (!todo) {
+    return res.status(400).json({ error: "Invalid data." });
+  }
+
+  const filePath = path.join(TODOS_DIR, `todo-${id}.json`);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "Todo not found." });
+  }
+
+  fs.writeFile(filePath, JSON.stringify(todo, null, 2), 'utf8', (err) => {
+    if (err) {
+      return res.status(500).json({ error: "Failed to update todo." });
+    }
+    res.json({ success: true, todo });
+  });
+});
+
+// DELETE endpoint to delete a todo
+app.delete('/api/todos/:id', (req, res) => {
+  const id = req.params.id;
+  const filePath = path.join(TODOS_DIR, `todo-${id}.json`);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "Todo not found." });
+  }
+
+  fs.unlink(filePath, (err) => {
+    if (err) {
+      return res.status(500).json({ error: "Failed to delete todo." });
+    }
+    res.json({ success: true, message: "Todo deleted successfully." });
+  });
 });
 
 // Start the server

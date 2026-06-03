@@ -14,7 +14,9 @@ class CanvasApp {
   constructor() {
     this.nodes = [];
     this.edges = [];
+    this.todos = [];
     this.editMode = false;
+    this.hoveredTodoId = null;
     
     // Canvas Pan & Zoom State
     this.panX = 0;
@@ -70,6 +72,7 @@ class CanvasApp {
     this.setupGroupButton();
     this.setupUploadHandlers();
     this.setupPasteHandlers();
+    this.setupTodoHandlers();
     this.updateStats();
   }
 
@@ -479,6 +482,11 @@ class CanvasApp {
     document.getElementById("btn-edge-cancel").addEventListener("click", () => this.closeModal("edge-modal"));
     document.getElementById("btn-edge-save").addEventListener("click", () => this.handleEdgeSave());
     document.getElementById("btn-edge-delete").addEventListener("click", () => this.handleEdgeDelete());
+
+    // Window resize auto centering
+    window.addEventListener("resize", () => {
+      this.zoomToFit();
+    });
   }
 
   // --- Upload Handlers ---
@@ -575,6 +583,30 @@ class CanvasApp {
       }
       const newFileName = `${timestamp}-${randomNum}.${ext}`;
       const renamedFile = new File([imageFile], newFileName, { type: imageFile.type });
+
+      // Scenario Todo Paste: Paste onto a TODO card
+      if (this.hoveredTodoId) {
+        try {
+          const formData = new FormData();
+          formData.append("image", renamedFile);
+
+          const response = await fetch("/api/upload", {
+            method: "POST",
+            body: formData
+          });
+
+          if (!response.ok) {
+            const errRes = await response.json();
+            throw new Error(errRes.error || "Upload failed.");
+          }
+
+          const data = await response.json();
+          this.updateTodo(this.hoveredTodoId, { image: data.url });
+        } catch (err) {
+          alert("粘贴图片到待办事项失败: " + err.message);
+        }
+        return;
+      }
 
       // Scenario A: Card modal is open and active
       const cardModal = document.getElementById("card-modal");
@@ -1728,6 +1760,311 @@ class CanvasApp {
     });
 
     return { nextW, nextH };
+  }
+
+  // --- TODO List Management ---
+  async loadTodos() {
+    try {
+      const res = await fetch('/api/todos');
+      if (!res.ok) throw new Error("Failed to fetch todos");
+      this.todos = await res.json();
+      this.renderTodos();
+    } catch (e) {
+      console.error("Failed to load todos:", e);
+      this.todos = [];
+      this.renderTodos();
+    }
+  }
+
+  async createTodo() {
+    const today = new Date().toISOString().split('T')[0];
+    const newTodo = {
+      id: Date.now().toString(),
+      title: "新待办事项",
+      desc: "点击添加描述...",
+      date: today,
+      completed: false,
+      priority: 0 // Default to 0 to put new tasks at the bottom
+    };
+
+    try {
+      const res = await fetch('/api/todos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newTodo)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        this.todos.push(data.todo);
+        this.renderTodos();
+        
+        // Auto edit the newly created todo title
+        this.editTodoTextInline(newTodo.id, 'title', '.todo-title');
+      }
+    } catch (e) {
+      console.error("Failed to create todo:", e);
+    }
+  }
+
+  async updateTodo(id, updatedFields) {
+    const todoIndex = this.todos.findIndex(t => t.id === id);
+    if (todoIndex === -1) return;
+
+    const updatedTodo = { ...this.todos[todoIndex], ...updatedFields };
+
+    try {
+      const res = await fetch(`/api/todos/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedTodo)
+      });
+      if (res.ok) {
+        this.todos[todoIndex] = updatedTodo;
+        this.renderTodos();
+      }
+    } catch (e) {
+      console.error("Failed to update todo:", e);
+    }
+  }
+
+  async deleteTodo(id) {
+    try {
+      const res = await fetch(`/api/todos/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        this.todos = this.todos.filter(t => t.id !== id);
+        this.renderTodos();
+      }
+    } catch (e) {
+      console.error("Failed to delete todo:", e);
+    }
+  }
+
+  toggleTodoSidebar() {
+    const sidebar = document.getElementById("todo-sidebar");
+    const toggleBtn = document.getElementById("btn-todo-toggle");
+    const isHidden = sidebar.classList.toggle("hidden");
+    document.body.classList.toggle("todo-sidebar-open", !isHidden);
+    localStorage.setItem("todo-sidebar-hidden", isHidden ? "true" : "false");
+    
+    if (isHidden) {
+      toggleBtn.classList.remove("active");
+    } else {
+      toggleBtn.classList.add("active");
+      this.loadTodos(); // refresh on open
+    }
+
+    // Centering fit after squeeze/expand transition ends (300ms)
+    setTimeout(() => {
+      this.zoomToFit();
+    }, 310);
+  }
+
+  setupTodoHandlers() {
+    const toggleBtn = document.getElementById("btn-todo-toggle");
+    const sidebar = document.getElementById("todo-sidebar");
+    
+    const savedHidden = localStorage.getItem("todo-sidebar-hidden");
+    if (savedHidden === "false" || savedHidden === null) {
+      sidebar.classList.remove("hidden");
+      document.body.classList.add("todo-sidebar-open");
+      toggleBtn.classList.add("active");
+      this.loadTodos();
+    } else {
+      sidebar.classList.add("hidden");
+      document.body.classList.remove("todo-sidebar-open");
+      toggleBtn.classList.remove("active");
+    }
+
+    toggleBtn.addEventListener("click", () => this.toggleTodoSidebar());
+    document.getElementById("btn-todo-add").addEventListener("click", () => this.createTodo());
+  }
+
+  renderTodos() {
+    const container = document.getElementById("todo-list-container");
+    container.innerHTML = "";
+
+    // Sort: incomplete first, then priority DESC (highest first), then date ASC, then id ASC (newer at bottom)
+    const sortedTodos = [...this.todos].sort((a, b) => {
+      if (a.completed !== b.completed) {
+        return a.completed ? 1 : -1;
+      }
+      const pA = a.priority !== undefined ? Number(a.priority) : 500;
+      const pB = b.priority !== undefined ? Number(b.priority) : 500;
+      if (pB !== pA) {
+        return pB - pA;
+      }
+      const dateDiff = new Date(a.date) - new Date(b.date);
+      if (dateDiff !== 0) return dateDiff;
+      return a.id.localeCompare(b.id);
+    });
+
+    if (sortedTodos.length === 0) {
+      container.innerHTML = `
+        <div style="text-align: center; color: var(--text-muted); padding: 40px 0; font-size: 13px;">
+          <i class="fa-regular fa-clipboard" style="font-size: 24px; margin-bottom: 8px; display: block; opacity: 0.5;"></i>
+          暂无待办事项
+        </div>
+      `;
+      return;
+    }
+
+    sortedTodos.forEach(todo => {
+      const card = document.createElement("div");
+      card.className = `todo-card ${todo.completed ? "completed" : ""}`;
+      card.dataset.id = todo.id;
+
+      const title = todo.title || todo.text || '无标题';
+      const desc = todo.desc || '点击添加描述...';
+      const prio = todo.priority !== undefined ? todo.priority : 0;
+
+      let imgHtml = "";
+      if (todo.image) {
+        imgHtml = `
+          <div class="todo-image-preview" style="background-image: url('${todo.image}')">
+            <button class="todo-btn-img-del" title="删除图片"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+        `;
+      }
+
+      card.innerHTML = `
+        ${imgHtml}
+        <div class="todo-card-row">
+          <input type="checkbox" class="todo-checkbox" ${todo.completed ? "checked" : ""}>
+          <div class="todo-text-container">
+            <div class="todo-title">${this.escapeHtml(title)}</div>
+            <div class="todo-desc">${this.escapeHtml(desc)}</div>
+          </div>
+          <button class="todo-btn-del" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+        <div class="todo-card-meta">
+          <div class="todo-date-wrapper">
+            <i class="fa-regular fa-calendar"></i>
+            <input type="date" class="todo-date-input" value="${todo.date}">
+          </div>
+          <div class="todo-priority-wrapper">
+            <span class="todo-priority-label">优先级:</span>
+            <input type="number" class="todo-priority-number-input" min="0" max="999" step="1" value="${prio}">
+          </div>
+        </div>
+      `;
+
+      // Event Listeners for hover tracking
+      card.addEventListener("mouseenter", () => {
+        this.hoveredTodoId = todo.id;
+      });
+      card.addEventListener("mouseleave", () => {
+        if (this.hoveredTodoId === todo.id) {
+          this.hoveredTodoId = null;
+        }
+      });
+
+      const checkbox = card.querySelector(".todo-checkbox");
+      checkbox.addEventListener("change", (e) => {
+        this.updateTodo(todo.id, { completed: e.target.checked });
+      });
+
+      const titleEl = card.querySelector(".todo-title");
+      titleEl.addEventListener("click", () => {
+        this.editTodoTextInline(todo.id, "title", ".todo-title");
+      });
+
+      const descEl = card.querySelector(".todo-desc");
+      descEl.addEventListener("click", () => {
+        this.editTodoTextInline(todo.id, "desc", ".todo-desc");
+      });
+
+      const deleteBtn = card.querySelector(".todo-btn-del");
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (confirm("确定要删除这条待办事项吗？")) {
+          this.deleteTodo(todo.id);
+        }
+      });
+
+      const imgDelBtn = card.querySelector(".todo-btn-img-del");
+      if (imgDelBtn) {
+        imgDelBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.updateTodo(todo.id, { image: null });
+        });
+      }
+
+      const dateInput = card.querySelector(".todo-date-input");
+      dateInput.addEventListener("change", (e) => {
+        this.updateTodo(todo.id, { date: e.target.value });
+      });
+
+      const prioInput = card.querySelector(".todo-priority-number-input");
+      const savePrio = () => {
+        let val = parseInt(prioInput.value, 10);
+        if (isNaN(val)) val = 0;
+        val = Math.max(0, Math.min(999, val));
+        prioInput.value = val;
+        this.updateTodo(todo.id, { priority: val });
+      };
+      prioInput.addEventListener("change", savePrio);
+      prioInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          savePrio();
+          prioInput.blur();
+        }
+      });
+
+      container.appendChild(card);
+    });
+  }
+
+  editTodoTextInline(id, fieldName, selector) {
+    const card = document.querySelector(`.todo-card[data-id="${id}"]`);
+    if (!card) return;
+
+    const el = card.querySelector(selector);
+    if (!el) return;
+
+    let currentText = el.textContent;
+    if (fieldName === 'desc' && currentText === '点击添加描述...') {
+      currentText = '';
+    }
+
+    const container = el.parentElement;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "todo-text-input";
+    input.value = currentText;
+    
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const saveEdit = () => {
+      let newText = input.value.trim();
+      if (fieldName === 'title' && !newText) newText = "待办事项";
+      if (fieldName === 'desc' && !newText) newText = "点击添加描述...";
+      this.updateTodo(id, { [fieldName]: newText });
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        saveEdit();
+      } else if (e.key === "Escape") {
+        this.renderTodos(); // cancel and restore
+      }
+    });
+
+    input.addEventListener("blur", () => {
+      saveEdit();
+    });
+  }
+
+  escapeHtml(str) {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 }
 

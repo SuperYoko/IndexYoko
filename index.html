@@ -74,6 +74,9 @@
     <button class="ui-btn" id="btn-theme" title="切换主题">
       <i class="fa-solid fa-moon"></i>
     </button>
+    <button class="ui-btn" id="btn-todo-toggle" title="展开/收起待办清单">
+      <i class="fa-solid fa-list-check"></i>
+    </button>
   </div>
 
   <!-- 左下角信息栏 -->
@@ -89,6 +92,22 @@
     <div class="info-item">
       <i class="fa-solid fa-magnifying-glass"></i>
       <span id="stat-zoom">100%</span>
+    </div>
+  </div>
+
+  <!-- 待办事项浮动侧边栏 -->
+  <div class="ui-panel todo-sidebar" id="todo-sidebar">
+    <div class="todo-sidebar-header">
+      <div class="todo-sidebar-title">
+        <i class="fa-solid fa-list-check" style="color: var(--accent);"></i>
+        <span>待办清单</span>
+      </div>
+      <button class="todo-add-btn" id="btn-todo-add" title="添加新待办">
+        <i class="fa-solid fa-plus"></i>
+      </button>
+    </div>
+    <div class="todo-list-container" id="todo-list-container">
+      <!-- 动态加载待办事项 -->
     </div>
   </div>
 
